@@ -25,7 +25,7 @@ Avatar sesi OBS'in kendi mikrofonundan okuyor, bu yüzden tarayıcıya mikrofon 
 
 1. Sahnede **Kaynaklar → + → Tarayıcı**
 2. **Yerel dosya** kutusunu işaretle ve `avatar-normal.html` dosyasını seç
-3. **Genişlik 360, Yükseklik 414** gir (`olcek: 6` için; ölçek 4 olursa 240×276, 8 olursa 480×552)
+3. **Genişlik 402, Yükseklik 480** gir (`olcek: 6` için; ölçek 5 olursa 335×400, 4 olursa 268×320)
 4. Webcam'in durduğu yere taşı
 
 Cehennem sahnesine aynı şekilde `avatar-cehennem.html`, Cennet sahnesine `avatar-cennet.html` ekle.
