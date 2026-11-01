@@ -13,7 +13,7 @@ window.AVATAR_AYAR = {
   yarim: -42,
   acik: -30,
 
-  // Piksel büyüklüğü. 6 → 360x396 piksel. OBS'teki genişlik/yüksekliği buna göre ayarla.
+  // Piksel büyüklüğü. 6 → 360x414 piksel. OBS'teki genişlik/yüksekliği buna göre ayarla.
   olcek: 6,
 
   // true yaparsan avatarın altında ses seviyesi ve OBS kaynak adları görünür (ayar yaparken aç, sonra kapat)

@@ -25,7 +25,7 @@
 
    URL parametreleri (hepsi isteğe bağlı):
      mode=normal | hell | heaven      sahneye göre kostüm
-     scale=6                          piksel büyütme (6 → 360x396 px)
+     scale=6                          piksel büyütme (6 → 360x414 px)
      audio=auto | obs | mic | demo    ses kaynağı (auto: önce OBS, olmazsa mikrofon)
      input=Mikrofon                   OBS'teki mikrofon kaynağının adı (bir kısmı yeter)
      pw=şifre                         obs-websocket şifresi (Araçlar → WebSocket Sunucu Ayarları)
@@ -50,7 +50,7 @@ const DEBUG = ['1', 'true'].includes(Q.get('debug'));
 const FIXED = Q.get('frame');
 
 // Mantıksal tuval: karakter 44x52, etrafında boynuz/hale/kanat için pay
-const CW = 44, CH = 52, OX = 8, OY = 12;
+const CW = 44, CH = 55, OX = 8, OY = 12;
 const LW = CW + OX * 2, LH = CH + OY + 2;
 
 const cv = document.getElementById('c');
@@ -59,93 +59,102 @@ const g = cv.getContext('2d');
 
 // ---------------------------------------------------------------- PALET
 const PAL = {
-  K: '#1b1418',            // dış çizgi
-  H: '#2b1f1c', h: '#4c3730', // saç, saç parlaması
-  S: '#f3cdb5', s: '#e2aa90', c: '#f1a59b', // ten, gölge, allık
-  B: '#2b1f1c',            // kaş
-  G: '#141218',            // gözlük çerçevesi
-  L: '#f7e2d6',            // cam arkası ten (hafif açık)
-  E: '#2a2430', W: '#ffffff', // göz, göz parlaması
-  M: '#b4505a', O: '#5a1d2a', t: '#e8737d', // dudak, ağız içi, dil
+  K: '#17121a',              // dış çizgi
+  H: '#241a17', h: '#3f2e27', // saç, saç parlaması
+  S: '#ebc2a5', s: '#d3a084', d: '#b98670', // ten, gölge, koyu gölge
+  u: '#e2b79d',              // sakal gölgesi
+  c: '#e98a7e',              // kızarma (sadece cehennem)
+  B: '#211714',              // kaş
+  G: '#121016',              // gözlük çerçevesi
+  L: '#f2d8c6',              // cam arkası ten
+  k: '#2c201d', E: '#2a1f1c', w: '#f1e8e2', // göz kapağı çizgisi, iris, göz akı
+  M: '#8a4c4b', m: '#a9685f', p: '#c48a7c', // dudak, dudak kenarı, alt dudak
+  O: '#4a1a22', t: '#d9707a', T: '#f3ece6', // ağız içi, dil, diş
 };
-const SHIRT = { p: '#bf9168', P: '#80553a', q: '#4d2f1f', C: '#d9b892', sh: '#6e4630' };
-const VEST = { a: '#2e4339', b: '#263830', trim: '#1c2a24' };
-const TIE = { T: '#2a2422', k: '#3c3431' };
-const STRAP = { R: '#8d5f3c', r: '#6a4429' };
+const SHIRT = { p: '#b48963', P: '#7a5137', q: '#4a2e1f', C: '#d2b38f', sh: '#694430' };
+const VEST = { a: '#2b3e35', b: '#22332c', trim: '#1a2721' };
+const TIE = { T: '#271f1d', k: '#3a302d' };
+const STRAP = { R: '#86593a', r: '#633f28' };
 
 // ---------------------------------------------------------------- KAFA
-// [başlangıç sütunu, satır, piksel dizisi]  ('.' = boş)
-const HAIR = [ // sütun 7'den başlar (30 piksel); dağınık, dikleşen saç
-  [7,-2, '..........H.......H...........'],
-  [7,-1, '......H...HH...H..HH....H.....'],
-  [7, 0, '.....HH..HHH..HH.HHH...HH.....'],
-  [7, 1, '....HHHH.HHHHHHHHHHHH.HHH..H..'],
-  [7, 2, '...HHHHHhHHHHhHHHHHHHHHHHHHH..'],
-  [7, 3, '..HHHHHhHHHHhHHHHHhHHHHHHHHHH.'],
-  [7, 4, '..HHHHhHHHHhHHHHHhHHHHHhHHHHH.'],
-  [7, 5, '.HHHHhHHHHhHHHHHhHHHHHhHHHHHHH'],
-  [7, 6, '.HHHHHHHHHHHHHHHHHHHHhHHHHHHH.'],
-  [7, 7, '..HHHHHHHHHHHHHHHHHHHHHHHHHHH.'],
-  [7, 8, '..HHHHHHHHHHHHHHHHHHHHHHHHHHH.'],
-  [7, 9, '..HHHHHHHHHHHHHHHHHHHHHHHHHHH.'],
-  [7,10, '..HHHHHHHSHHHHHSHHHHHHHHHHHHH.'],
-  [7,11, '..HHHHHSSSHHHSSSHHHHSHHHHHHHH.'],
-  [7,12, '..HHHSSSSSHSSSSSHHSSSSSHSHHHH.'],
-  [9,13, 'H'],[9,14,'H'],[9,15,'H'],[34,13,'H'],[34,14,'H'],[34,15,'H'],
+// [başlangıç sütunu, satır, piksel dizisi]  ('.' = boş). Yüz sütun 12–31, merkez 21.5
+const HAIR = [ // kısa, dokulu, yana yatık; yanlar kısa (kulaklar açıkta)
+  [14, 1, 'H.HH..HHH.HH.H..'],
+  [12, 2, '.HHHHHHHHHHHHHHHHH.'],
+  [11, 3, 'HHHHHhHHHHHhHHHHHHHH'],
+  [10, 4, 'HHHHHhHHHHhHHHHHhHHHHHH'],
+  [10, 5, 'HHHHhHHHHhHHHHHhHHHHHHHH'],
+  [10, 6, 'HHHHHHHHHHHHHHhHHHHHHHHH'],
+  [10, 7, 'HHHHHHHHHHHHHHHHHHHHHHHH'],
+  [10, 8, 'HHHSSSSHHHHHHHHHHHHHHHHH'],
+  [10, 9, 'HHSSSSSSShHHHHhHHHHHHHHH'],
+  [10,10, 'HHSSSSSSSSShHHHHhHHHHHHH'],
+  [10,11, 'HHSSSSSSSSSSSSHHHSSSSHHH'],
+  [10,12, '.HSSSSSSSSSSSSSSHSSSSSH.'],
 ];
-const FACE = [ // sütun 10'dan başlar, 24 piksel
-  [10,13, 'HSSSBBBBBSSSSSBBBBBSSSSH'],
-  [10,14, 'HSSGGGGGGGGSSGGGGGGGGSSH'],
+const FACE = [ // sütun 10'dan başlar, 24 piksel (ilk/son 2 = yüz dışı)
+  [10,13, '.HSSSSSSSSSSSSSSSSSSSSH.'],
+  [10,14, '.HSGGGGGGGGSSGGGGGGGGSH.'],
   [10,15, 'GGGGLLLLLLGGGGLLLLLLGGGG'],
-  [10,16, 'SSSGLLEWLLGSSGLLEWLLGSSS'],
-  [10,17, 'SSSGLLEELLGSSGLLEELLGSSS'],
-  [10,18, 'SSSGLLLLLLGSSGLLLLLLGSSS'],
-  [10,19, 'SSSGGGGGGGGSSGGGGGGGGSSS'],
-  [10,20, 'SSSSSSSSSSSssSSSSSSSSSSS'],
-  [10,21, 'SSScccSSSSSsSSSSSScccSSS'],
-  [10,22, 'SSScccSSSSSSSSSSSScccSSS'],
-  [10,23, 'SSSSSSSSSSSSSSSSSSSSSSSS'],
-  [10,24, 'SSSSSSSSSSSSSSSSSSSSSSSS'],
-  [10,25, '.sSSSSSSSSSSSSSSSSSSSSs.'],
-  [10,26, '..sSSSSSSSSSSSSSSSSSSs..'],
-  [10,27, '...ssSSSSSSSSSSSSSSss...'],
-  [10,28, '.....sssSSSSSSSSsss.....'],
+  [10,16, '..SGLkEWkLGSSGLkEWkLGS..'],
+  [10,17, '..SGLwEEwLGSSGLwEEwLGS..'],
+  [10,18, '..SGLLLLLLGSSGLLLLLLGS..'],
+  [10,19, '..SGGGGGGGGSSGGGGGGGGs..'],
+  [10,20, '..SSSSSSSSSSsSSSSSSSSs..'],
+  [10,21, '..SSSSSSSSSSsSSSSSSSSs..'],
+  [10,22, '..SSSSSSSSsSdsSSSSSSSs..'],
+  [10,23, '..SSSSSSSuuuuuuSSSSSSs..'],
+  [10,24, '..SSSSSSSSSSSSSSSSSSSs..'],
+  [10,25, '..sSSSSSSSSSSSSSSSSSSd..'],
+  [10,26, '...sSSSSSSSSSSSSSSSSd...'],
+  [10,27, '....sSSSSSSSSSSSSSSd....'],
+  [10,28, '.....sSSSuuuuuuSSSd.....'],
+  [10,29, '......ssSSuuuuSSsd......'],
+  [10,30, '........ssssssss........'],
 ];
 const EARS = [
-  [ 9,16,'S'],[ 9,17,'S'],[ 9,18,'S'],[ 9,19,'S'],[ 9,20,'s'],
-  [ 8,17,'s'],[ 8,18,'s'],[ 8,19,'s'],
-  [34,16,'S'],[34,17,'S'],[34,18,'S'],[34,19,'S'],[34,20,'s'],
-  [35,17,'s'],[35,18,'s'],[35,19,'s'],
+  [11,16,'S'],[11,17,'S'],[11,18,'S'],[11,19,'S'],[11,20,'S'],[11,21,'s'],
+  [10,16,'s'],[10,17,'S'],[10,18,'d'],[10,19,'S'],[10,20,'s'],
+  [32,16,'S'],[32,17,'S'],[32,18,'S'],[32,19,'S'],[32,20,'s'],[32,21,'d'],
+  [33,16,'s'],[33,17,'S'],[33,18,'d'],[33,19,'s'],[33,20,'d'],
 ];
-// Ağız kareleri (sütun 19, satır 23'ten itibaren)
-const MOUTHS = {
-  closed: ['M....M', '.MMMM.'],
-  half:   ['.MMMM.', 'MOOOOM', '.MMMM.'],
-  open:   ['.MMMM.', 'MOOOOM', 'MOttOM', '.MMMM.'],
-  shout:  ['.MMMM.', 'MOOOOM', 'MOOOOM', 'MOttOM', '.MMMM.'],
+// Kaşlar ayrı katman: kalın, düz, gözlüğe yakın
+const BROWS = {
+  normal: [[13,13],[14,13],[15,13],[16,13],[17,13],[18,13],[19,13],[15,12],[16,12],[17,12],[18,12]],
+  angry:  [[13,11],[14,11],[13,12],[14,12],[15,12],[16,12],[16,13],[17,13],[18,13],[19,13],[18,14],[19,14]],
 };
-const EYE_PIX = [[16,16],[17,16],[16,17],[17,17],[26,16],[27,16],[26,17],[27,17]];
+// Ağız kareleri (sütun 19, satır 24'ten itibaren) — ince dudak, ciddi ifade
+const MOUTHS = {
+  closed: ['mMMMMm', '.pppp.'],
+  half:   ['mMMMMm', 'MOOOOM', '.pppp.'],
+  open:   ['mMMMMm', 'MTTTTM', 'MOOOOM', '.pppp.'],
+  shout:  ['mMMMMm', 'MTTTTM', 'MOOOOM', 'MOttOM', '.pppp.'],
+};
+const EYE_PIX = [];
+for (const x0 of [15, 25]) for (let i = 0; i < 4; i++) EYE_PIX.push([x0 + i, 16], [x0 + i, 17]);
 
 // ---------------------------------------------------------------- GÖVDE
+const BODY_Y = 35; // omuzların başladığı satır
 function drawBody(put) {
-  const cx = 22;
-  const hwOf = y => ({ 32: 9, 33: 13, 34: 16, 35: 18 })[y] ?? 19;
-  for (let y = 28; y < CH; y++) {
+  const cx = 22, o = BODY_Y - 32;
+  const hwOf = y => ({ 32: 11, 33: 15, 34: 18, 35: 19 })[y] ?? 20;
+  for (let y = 27; y < CH; y++) {
+    const yy = y - o; // gövde formülleri omuz satırı 32 kabul edilerek yazıldı
     for (let x = 0; x < CW; x++) {
       const dx = x + 0.5 - cx, ax = Math.abs(dx);
-      if (y < 32) { // boyun
-        if (ax < 5) put(x, y, y <= 29 ? PAL.s : PAL.S);
+      if (yy < 32) { // boyun (kalın)
+        if (ax < 7) put(x, y, y <= 31 ? PAL.d : y <= 32 ? PAL.s : (ax > 5.5 ? PAL.s : PAL.S));
         continue;
       }
-      const hw = hwOf(y);
+      const hw = hwOf(yy);
       if (ax >= hw) continue;
-      const vn = Math.max(0, 7 - (y - 32) * 0.65);
-      const vestHalf = y >= 35 ? hw - 5 : hw - 3;
+      const vn = Math.max(0, 7 - (yy - 32) * 0.65);
+      const vestHalf = yy >= 35 ? hw - 5 : hw - 3;
       let col;
       if (ax < vn) { // V yaka içi: gömlek + kravat
-        if (y <= 33 && ax < 2.5) col = (y === 32 ? TIE.k : TIE.T);
-        else if (ax < 1.5) col = (y % 3 === 0 ? TIE.k : TIE.T);
-        else if (y <= 34) col = SHIRT.C;
+        if (yy <= 33 && ax < 2.5) col = (yy === 32 ? TIE.k : TIE.T);
+        else if (ax < 1.5) col = (yy % 3 === 0 ? TIE.k : TIE.T);
+        else if (yy <= 34) col = SHIRT.C;
         else col = plaid(x, y);
       } else if (ax < vestHalf) { // yelek
         if (ax < vn + 1.3) col = VEST.trim;
@@ -157,11 +166,11 @@ function drawBody(put) {
     }
   }
   // çanta askısı (omuzdan kalçaya çapraz)
-  for (let y = 33; y < CH; y++) {
-    const xs = cx + 13 - (y - 33) * 1.7;
+  for (let y = BODY_Y + 1; y < CH; y++) {
+    const xs = cx + 14 - (y - BODY_Y - 1) * 1.7;
     for (let x = 0; x < CW; x++) {
       const d = x + 0.5 - xs;
-      if (Math.abs(d) < 1.4 && Math.abs(x + 0.5 - cx) < hwOf(y)) put(x, y, d > 0.4 ? STRAP.r : STRAP.R);
+      if (Math.abs(d) < 1.4 && Math.abs(x + 0.5 - cx) < hwOf(y - o)) put(x, y, d > 0.4 ? STRAP.r : STRAP.R);
     }
   }
 }
@@ -179,10 +188,10 @@ const HORN = [
 ];
 const HORN_COL = { r: '#ff6a55', R: '#c8202f' };
 const WING = [ // sol kanat, sağdaki aynalanır
-  [-7,24,'w'],[-7,25,'ww'],[-7,26,'wwww'],[-7,27,'wWwwww'],[-6,28,'wWwwwww'],
-  [-7,29,'wwWwwwwww'],[-7,30,'WwwWWwwwww'],[-7,31,'.wwwwWWwww'],[-7,32,'..WwwwwwWw'],
-  [-6,33,'.wwwwwwWw'],[-6,34,'..WwwwwW'],[-5,35,'.wwwwwW'],[-5,36,'..WwwW'],
-  [-4,37,'.wwwW'],[-4,38,'..wW'],
+  [-7,27,'w'],[-7,28,'ww'],[-7,29,'wwww'],[-7,30,'wWwwww'],[-6,31,'wWwwwww'],
+  [-7,32,'wwWwwwwww'],[-7,33,'WwwWWwwwww'],[-7,34,'.wwwwWWwww'],[-7,35,'..WwwwwwWw'],
+  [-6,36,'.wwwwwwWw'],[-6,37,'..WwwwwW'],[-5,38,'.wwwwwW'],[-5,39,'..WwwW'],
+  [-4,40,'.wwwW'],[-4,41,'..wW'],
 ];
 const WING_COL = { w: '#ffffff', W: '#d6e2f2' };
 
@@ -222,30 +231,27 @@ function render(now) {
 
   drawBody(put);
   putRows(HAIR, PAL, headDy);
-  putRows(FACE, PAL, headDy);
   for (const [x, y, ch] of EARS) put(x, y, PAL[ch], headDy);
+  putRows(FACE, PAL, headDy);
+  for (const [x, y] of BROWS[MODE === 'hell' ? 'angry' : 'normal']) { put(x, y, PAL.B, headDy); put(mirror(x), y, PAL.B, headDy); }
 
   // kızgın kaşlar (cehennem)
   if (MODE === 'hell') {
-    for (const x of [14, 15, 27, 28]) put(x, 13, PAL.S, headDy);
-    for (const [x, y] of [[14,12],[15,12],[16,13],[17,13],[18,13],[25,13],[26,13],[27,12],[28,12],[24,13]])
-      put(x, y, PAL.B, headDy);
-    for (const [x, y] of [[12,22],[13,23],[30,22],[29,23]]) put(x, y, PAL.c, headDy);
+    for (const [x, y] of [[13,21],[14,21],[15,21],[14,22]]) { put(x, y, PAL.c, headDy); put(mirror(x), y, PAL.c, headDy); }
   }
 
   // gözler: kırpma / uykulu
   const sleepy = !FIXED && MODE === 'normal' && now - st.lastLoud > 30000;
   const blinking = FIXED === 'blink' || (!FIXED && now < st.blinkUntil);
   if (blinking) {
-    for (const [x, y] of EYE_PIX) put(x, y, y === 16 ? PAL.L : PAL.E, headDy);
-    for (const x of [15, 18, 25, 28]) put(x, 17, PAL.E, headDy);
+    for (const [x, y] of EYE_PIX) put(x, y, y === 16 ? PAL.L : PAL.k, headDy);
   } else if (sleepy) {
-    for (const [x, y] of EYE_PIX) if (y === 16) put(x, y, PAL.L, headDy);
+    for (const [x, y] of EYE_PIX) if (y === 16) put(x, y, PAL.k, headDy); // ağır göz kapağı
   }
 
   // ağız
   const m = MOUTHS[FIXED && MOUTHS[FIXED] ? FIXED : st.mouth];
-  m.forEach((row, i) => { for (let k = 0; k < row.length; k++) if (row[k] !== '.') put(19 + k, 23 + i, PAL[row[k]], headDy); });
+  m.forEach((row, i) => { for (let k = 0; k < row.length; k++) if (row[k] !== '.') put(19 + k, 24 + i, PAL[row[k]], headDy); });
 
   // gözlük parlaması: camların üstünden çapraz geçen ışık
   const gt = now - st.glintAt;
