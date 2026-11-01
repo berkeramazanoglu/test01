@@ -2,14 +2,15 @@
 
 ![önizleme](onizleme.gif)
 
-Webcam yerine kullanılan, konuşunca ağzı oynayan pixel karakter. Gözünü kırpıyor, nefes alır gibi hafifçe iniş çıkış yapıyor, gözlüğünde ara sıra ışık parlıyor. 30 saniye susunca uykusu geliyor ve "z" çıkarmaya başlıyor.
+Webcam yerine kullanılan, konuşunca ağzı oynayan pixel karakter. Gözünü kırpıyor, nefes alır gibi hafifçe iniş çıkış yapıyor, gözlüğünde ara sıra ışık parlıyor. 30 saniye susunca kafasının üstünde "z" harfleri çıkmaya başlıyor.
 
 | Dosya | Ne için |
 |---|---|
 | `avatar-normal.html` | Normal ders ekranları |
-| `avatar-cehennem.html` | RAGE ekranı: boynuz, kızgın kaş, yanlardan alev, bağırınca kulaktan buhar |
+| `avatar-cehennem.html` | RAGE ekranı: boynuz, çatık kaş, kızaran yanaklar, yanlardan alev, bağırınca kulaktan buhar |
 | `avatar-cennet.html` | Cennet ekranı: hale, kanat, yıldızlar |
 | `ayarlar.js` | Şifre, mikrofon adı, ağız hassasiyeti, boyut |
+| `sprite.js` | Karakterin kendisi ve kareleri (silme, avatar bunsuz çalışmaz) |
 | `kareler/` | Yedek plan için PNG kareler (aşağıda) |
 
 ## 1. OBS'te WebSocket'i aç (bir kere)
@@ -25,7 +26,7 @@ Avatar sesi OBS'in kendi mikrofonundan okuyor, bu yüzden tarayıcıya mikrofon 
 
 1. Sahnede **Kaynaklar → + → Tarayıcı**
 2. **Yerel dosya** kutusunu işaretle ve `avatar-normal.html` dosyasını seç
-3. **Genişlik 402, Yükseklik 480** gir (`olcek: 6` için; ölçek 5 olursa 335×400, 4 olursa 268×320)
+3. **Genişlik 480, Yükseklik 459** gir (`olcek: 3` için; ölçek 2 olursa 320×306, 4 olursa 640×612)
 4. Webcam'in durduğu yere taşı
 
 Cehennem sahnesine aynı şekilde `avatar-cehennem.html`, Cennet sahnesine `avatar-cennet.html` ekle.
@@ -45,3 +46,13 @@ Avatar sesi duyamazsa sol üstte 20 saniyeliğine sebebini yazar ("şifre yanlı
 ## Yedek plan: veadotube mini
 
 Tarayıcı yolu bir sebeple çalışmazsa ücretsiz **veadotube mini** programını kullanabilirsin. `kareler/` içindeki PNG'leri sahnelere ver: konuşmuyorken `normal-closed.png`, konuşurken `normal-open.png`, göz kırparken `normal-blink.png`. Cehennem ve Cennet için de aynı isimlerle kareler var.
+
+## Karakteri yeniden üretmek
+
+`sprite.js`, portre görselinden `araclar/sprite_olustur.py` ile üretildi. Portreyi değiştirirsen:
+
+```bash
+python3 -I araclar/sprite_olustur.py PORTRE.webp sprite.js
+```
+
+Betikteki göz, dudak ve kaş koordinatları şimdiki portreye göre ölçüldü. Farklı bir görselde bunların yeniden ölçülmesi gerekir.

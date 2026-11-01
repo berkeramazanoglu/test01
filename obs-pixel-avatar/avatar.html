@@ -19,13 +19,15 @@
 <div id="dbg"></div>
 <div id="msg"></div>
 <script src="ayarlar.js"></script>
+<script src="sprite.js"></script>
 <script>
 /* =====================================================================
    PIXEL AVATAR — ses seviyesine göre konuşan pixel karakter (OBS için)
+   Karakterin kendisi sprite.js'te (araclar/sprite_olustur.py ile portreden üretilir)
 
    URL parametreleri (hepsi isteğe bağlı):
      mode=normal | hell | heaven      sahneye göre kostüm
-     scale=6                          piksel büyütme (6 → 402x480 px)
+     scale=3                          piksel büyütme (3 → 480x453 px)
      audio=auto | obs | mic | demo    ses kaynağı (auto: önce OBS, olmazsa mikrofon)
      input=Mikrofon                   OBS'teki mikrofon kaynağının adı (bir kısmı yeter)
      pw=şifre                         obs-websocket şifresi (Araçlar → WebSocket Sunucu Ayarları)
@@ -41,7 +43,7 @@ const AYAR = window.AVATAR_AYAR || {};
 const AYAR_MAP = { pw: 'sifre', input: 'mikrofon', half: 'yarim', open: 'acik', scale: 'olcek', port: 'port', audio: 'ses', mode: 'mod', debug: 'ayar_ekrani' };
 const Q = { get: k => URLQ.get(k) ?? (AYAR[AYAR_MAP[k]] != null && AYAR[AYAR_MAP[k]] !== '' ? String(AYAR[AYAR_MAP[k]]) : null),
             has: k => Q.get(k) !== null };
-const SCALE = Math.max(1, +Q.get('scale') || 6);
+const SCALE = Math.max(1, +Q.get('scale') || 3);
 const MODE = (Q.get('mode') || 'normal').toLowerCase();
 const AUDIO = (Q.get('audio') || 'auto').toLowerCase();
 const HALF_DB = Q.has('half') ? +Q.get('half') : -42;
@@ -49,171 +51,66 @@ const OPEN_DB = Q.has('open') ? +Q.get('open') : -30;
 const DEBUG = ['1', 'true'].includes(Q.get('debug'));
 const FIXED = Q.get('frame');
 
-// Mantıksal tuval: karakter 51x68, etrafında boynuz/hale/kanat için pay
-const CW = 51, CH = 68, OX = 8, OY = 10;
+// ---------------------------------------------------------------- SPRITE
+// sprite.js: portreden üretilmiş 128 piksellik karakter + kareler (araclar/sprite_olustur.py)
+const SP = window.SPRITE;
+const ALPH = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const CW = SP.w, CH = SP.h;            // karakter boyutu (piksel)
+const OX = 16, OY = 18;                // boynuz/hale/kanat için kenar payı
 const LW = CW + OX * 2, LH = CH + OY + 2;
 
 const cv = document.getElementById('c');
 cv.width = LW * SCALE; cv.height = LH * SCALE;
 const g = cv.getContext('2d');
+g.imageSmoothingEnabled = false;
+const buf = document.createElement('canvas'); buf.width = LW; buf.height = LH;
+const bctx = buf.getContext('2d');
+const img = bctx.createImageData(LW, LH);
+const grid = new Uint32Array(img.data.buffer); // 0 = boş
 
-// ---------------------------------------------------------------- PALET
-const PAL = {
-  K: '#17121a',                              // dış çizgi
-  H: '#211713', h: '#3b2b24',                // saç, saç parlaması
-  S: '#e8c0a8', s: '#cf9d86', d: '#b07e6c',  // ten, gölge, koyu gölge
-  c: '#e9897c',                              // kızarma (sadece cehennem)
-  B: '#1f1512',                              // kaş
-  G: '#121016', L: '#f0d6c6',                // gözlük çerçevesi, cam arkası ten
-  k: '#2a1e1b', E: '#3a271f', w: '#f2e9e3', W: '#ffffff', // göz kapağı, iris, göz akı, parıltı
-  M: '#7a3a3b', m: '#b56a63', p: '#cc8a7e', P: '#dba497', // dudak çizgisi, üst dudak, alt dudak, dudak ışığı
-  O: '#4a1a22', t: '#d46e78', T: '#f3ece6',  // ağız içi, dil, diş
+const u32 = hex => { // '#rrggbb' → ImageData'nın beklediği sıra (ABGR)
+  const n = parseInt(hex.slice(1), 16);
+  return (255 << 24 | (n & 255) << 16 | (n >> 8 & 255) << 8 | n >> 16) >>> 0;
 };
-const SHIRT = { p: '#b48963', P: '#7a5137', q: '#4a2e1f', C: '#d2b38f', sh: '#694430' };
-const VEST = { a: '#2b3e35', b: '#22332c', trim: '#1a2721' };
-const TIE = { T: '#271f1d', k: '#3a302d' };
-const STRAP = { R: '#86593a', r: '#633f28' };
-
-// ---------------------------------------------------------------- KAFA
-// Oranlar düz bakan fotoğraftan ölçüldü: yüz 29 piksel geniş (0..28, merkez 14),
-// saç tepesi 0, kaşlar 21-22, gözlük 24-31, gözler 26-27, burun ucu 35, ağız 37-40, çene 45.
-const HX = 11, HY = 2;   // yüz koordinatı → tuval koordinatı
-const FW = 28;           // yüzde aynalama: c → FW - c
-const HEAD = new Map();  // "c,r" → renk (değişmeyen kısım, bir kere hesaplanır)
-(function buildHead() {
-  const set = (c, r, col) => HEAD.set(c + ',' + r, col);
-  const get = (c, r) => HEAD.get(c + ',' + r);
-  // yüz dış hattı (yuvarlak, geniş çene)
-  const faceSpan = r => r < 9 ? null : r <= 34 ? [0, 28] : r <= 37 ? [1, 27] : r <= 40 ? [2, 26]
-    : ({ 41: [3, 25], 42: [4, 24], 43: [5, 23], 44: [7, 21], 45: [9, 19] })[r] || null;
-  // saç silüeti
-  const hairSpan = r => ({ 0: [5, 23], 1: [3, 25], 2: [1, 27], 3: [0, 28], 21: [-1, 29], 22: [0, 29] })[r]
-    || (r >= 4 && r <= 20 ? [-1, 29] : r <= 24 && r >= 23 ? [25, 29] : null);
-  // alın: saçın açıkta bıraktığı aralık
-  const brow = r => ({ 9: [9, 21], 10: [6, 22], 11: [4, 23] })[r] || (r <= 22 ? [3, 24] : [-9, 24]);
-  // perçem: alna düşen ayrı ayrı tutamlar (blok değil)
-  const FRINGE = { 9: [[12, 20]], 10: [[13, 14], [17, 21]], 11: [[14, 14], [18, 19], [21, 22]], 12: [[19, 19], [22, 23]], 13: [[22, 23]], 14: [[23, 23]] };
-
-  for (let r = 9; r <= 45; r++) { const f = faceSpan(r); if (f) for (let c = f[0]; c <= f[1]; c++) set(c, r, 'S'); }
-  // kulaklar
-  for (let r = 25; r <= 32; r++) set(-2, r, 'S');
-  for (let r = 24; r <= 33; r++) set(-1, r, r >= 26 && r <= 30 ? 'd' : 'S');
-  for (let r = 25; r <= 32; r++) set(29, r, r >= 27 && r <= 30 ? 'd' : 's');
-  for (let r = 26; r <= 31; r++) set(30, r, 's');
-  // saç
-  for (const [c, r] of [[9, -2], [14, -2], [20, -2], [7, -1], [8, -1], [11, -1], [12, -1], [13, -1], [16, -1], [18, -1], [19, -1], [22, -1], [3, 0], [25, 0], [-1, 3], [29, 3], [-2, 5], [-2, 8], [30, 6], [30, 9]]) set(c, r, 'H');
-  for (let r = 0; r <= 24; r++) {
-    const hs = hairSpan(r); if (!hs) continue;
-    const [a, b] = r >= 9 ? brow(r) : [99, -99];
-    for (let c = hs[0]; c <= hs[1]; c++) {
-      const inForehead = c >= a && c <= b;
-      const fr = FRINGE[r] || [];
-      if (!inForehead || fr.some(([p, q]) => c >= p && c <= q)) set(c, r, 'H');
-    }
-  }
-  for (const [c, r] of [[8,1],[7,2],[6,3],[5,4], [13,0],[12,1],[11,2],[10,3], [18,1],[17,2],[16,3],
-                        [23,3],[22,4],[21,5],[20,6], [3,6],[2,7],[1,8], [26,6],[25,7],[25,9],
-                        [19,10],[20,11],[21,12]]) if (get(c, r) === 'H') set(c, r, 'h');
-  // ten gölgeleri: saçın altı, sağ yanak (ışık soldan), çene hattı
-  for (const [key, col] of [...HEAD]) {
-    if (col !== 'S') continue;
-    const [c, r] = key.split(',').map(Number);
-    const f = faceSpan(r);
-    const above = get(c, r - 1);
-    if (above === 'H' || above === 'h') set(c, r, 's');
-    else if (f && r >= 18 && c >= f[1] - 1) set(c, r, 's');
-    else if (f && r >= 41 && (c === f[0] || c === f[1])) set(c, r, 's');
-    else if (r === 45) set(c, r, 's');
-  }
-  // burun: sağda köprü gölgesi, kanatlar, delikler, altında gölge
-  for (let r = 28; r <= 33; r++) set(16, r, 's');
-  for (const [c, r, col] of [[16,32,'s'],[17,33,'s'],[11,33,'s'],[10,34,'s'],[11,34,'s'],[17,34,'d'],[18,34,'s'],
-                             [11,35,'s'],[12,35,'d'],[13,35,'s'],[15,35,'s'],[16,35,'d'],[17,35,'s'],
-                             [12,36,'s'],[13,36,'s'],[14,36,'s'],[15,36,'s'],[16,36,'s']]) set(c, r, col);
-  // gözlük: kalın dikdörtgen çerçeve, yüzün neredeyse tamamı kadar geniş
-  for (const [l, rgt] of [[1, 12], [16, 27]]) for (let r = 24; r <= 31; r++) for (let c = l; c <= rgt; c++) {
-    const edge = r === 24 || r === 31 || c === l || c === rgt;
-    set(c, r, edge ? 'G' : (get(c, r) === 'S' ? 'L' : get(c, r)));
-  }
-  for (const c of [13, 14, 15, -1, 0, 28, 29]) set(c, 25, 'G');
-})();
-
-// Değişen katmanlar
-const BROWS = { // sol kaş; sağdaki aynalanır
-  normal: [[5,21],[6,21],[7,21],[8,21],[9,21],[10,21],[11,21],[3,22],[4,22],[8,22],[9,22],[10,22],[11,22]],
-  angry:  [[4,20],[5,20],[4,21],[5,21],[6,21],[7,21],[7,22],[8,22],[9,22],[10,22],[11,22],[10,23],[11,23]],
-};
-const EYE = ['kEEEk', 'wEEEw']; // sol göz, sütun 5..9, satır 26-27
-const EYE_HL = [8, 26];         // iris parıltısı
-// Ağız kareleri: sütun 9..19, satır 37'den itibaren (dolgun dudaklar)
-const MOUTHS = {
-  closed: ['..mmmmmmm..', '.MMMMMMMMM.', '..ppPPPpp..', '...sssss...'],
-  half:   ['..mmmmmmm..', '.MMMMMMMMM.', '.MOOOOOOOM.', '..ppPPPpp..', '...sssss...'],
-  open:   ['..mmmmmmm..', '.MMMMMMMMM.', '.MTTTTTTTM.', '.MOOOOOOOM.', '..MOtttOM..', '...ppppp...'],
-  shout:  ['..mmmmmmm..', '.MMMMMMMMM.', '.MTTTTTTTM.', '.MOOOOOOOM.', '.MOOOOOOOM.', '..MOtttOM..', '...ppppp...'],
-};
-
-// ---------------------------------------------------------------- GÖVDE
-const BODY_Y = 50; // omuzların başladığı satır
-const BCX = 25;    // gövde merkezi (yüz merkezi 14 + HX)
-function drawBody(put) {
-  const hwOf = yy => [13, 18, 21, 23][yy] ?? 24;
-  for (let y = BODY_Y - 7; y < CH; y++) {
-    const yy = y - BODY_Y;
-    for (let x = 0; x < CW; x++) {
-      const ax = Math.abs(x - BCX);
-      if (yy < 0) { // boyun
-        if (ax <= 8) put(x, y, y < BODY_Y - 3 ? PAL.d : ax >= 7 ? PAL.s : PAL.S);
-        continue;
-      }
-      const hw = hwOf(yy);
-      if (ax >= hw) continue;
-      const vn = Math.max(0, 8 - yy * 0.6);
-      const vestHalf = yy >= 3 ? hw - 6 : hw - 3;
-      let col;
-      if (ax < vn) { // V yaka içi: gömlek + kravat
-        if (yy <= 1 && ax <= 2) col = (yy === 0 ? TIE.k : TIE.T);
-        else if (ax <= 1) col = (y % 3 === 0 ? TIE.k : TIE.T);
-        else if (yy <= 2) col = SHIRT.C;
-        else col = plaid(x, y);
-      } else if (ax < vestHalf) { // yelek
-        if (ax < vn + 1.3) col = VEST.trim;
-        else col = (x % 2 ? VEST.a : VEST.b);
-      } else { // gömlek kolu
-        col = ax > hw - 1.5 ? SHIRT.sh : plaid(x, y);
-      }
-      put(x, y, col);
-    }
-  }
-  // çanta askısı (omuzdan kalçaya çapraz)
-  for (let y = BODY_Y + 1; y < CH; y++) {
-    const xs = BCX + 17 - (y - BODY_Y - 1) * 1.7;
-    for (let x = 0; x < CW; x++) {
-      const d = x - xs;
-      if (Math.abs(d) < 1.4 && Math.abs(x - BCX) < hwOf(y - BODY_Y)) put(x, y, d > 0.4 ? STRAP.r : STRAP.R);
-    }
-  }
+const COLS = new Map(); const col = c => typeof c === 'number' ? c : (COLS.get(c) ?? (COLS.set(c, u32(c)), COLS.get(c)));
+const PAL32 = SP.pal.map(u32);
+const BASE = new Int8Array(CW * CH);
+for (let j = 0; j < BASE.length; j++) BASE[j] = SP.base[j] === '.' ? -1 : ALPH.indexOf(SP.base[j]);
+const PATCH = {};
+for (const [k, s] of Object.entries(SP.patches)) {
+  const list = []; for (let j = 0; j < s.length; j++) if (s[j] !== '.') list.push(j, ALPH.indexOf(s[j]));
+  PATCH[k] = list;
 }
-function plaid(x, y) {
-  const a = x % 4 === 0, b = y % 4 === 0;
-  return a && b ? SHIRT.q : (a || b) ? SHIRT.P : SHIRT.p;
+// cehennemde yanak kızarması: palet rengini kırmızıya karıştır
+const FLUSH = new Map();
+for (const [cx, cy, rx, ry] of SP.cheeks) for (let y = cy - ry; y <= cy + ry; y++) for (let x = cx - rx; x <= cx + rx; x++) {
+  const d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2; if (d > 1) continue;
+  FLUSH.set(y * CW + x, 0.6 * Math.sqrt(1 - d));
 }
+const mixRed = (i, a) => {
+  const n = parseInt(SP.pal[i].slice(1), 16), r = n >> 16, gg = n >> 8 & 255, b = n & 255;
+  return u32('#' + [r + (235 - r) * a, gg + (60 - gg) * a, b + (70 - b) * a].map(v => Math.round(v).toString(16).padStart(2, '0')).join(''));
+};
+const LENS_SUM = SP.lens.map(j => (j % CW) + Math.floor(j / CW));
+const LENS_MIN = Math.min(...LENS_SUM), LENS_MAX = Math.max(...LENS_SUM);
 
-// ---------------------------------------------------------------- KOSTÜMLER
-const mirror = x => CW - 1 - x;
-const HORN = [
-  [15,-1,'r'],[15,0,'r'],[16,0,'r'],[16,1,'r'],[17,1,'R'],
-  [16,2,'r'],[17,2,'R'],[18,2,'R'],[17,3,'r'],[18,3,'R'],[19,3,'R'],
-  [17,4,'r'],[18,4,'R'],[19,4,'R'],[20,4,'R'],
+// ---------------------------------------------------------------- KOSTÜMLER (2x2 "büyük piksel" birimiyle)
+const EM = x => (CW / 2 - 1) - x;   // efekt birimiyle aynalama
+const HORN = [ // taban sol alt köşe (0,0), yukarı doğru
+  [0,0,'R'],[1,0,'R'],[2,0,'R'],[3,0,'R'],[0,-1,'r'],[1,-1,'R'],[2,-1,'R'],
+  [0,-2,'r'],[1,-2,'R'],[-1,-3,'r'],[0,-3,'R'],[-1,-4,'r'],[-1,-5,'r'],
 ];
 const HORN_COL = { r: '#ff6a55', R: '#c8202f' };
-const WING = [ // sol kanat, sağdaki aynalanır
-  [-7,42,'w'],[-7,43,'ww'],[-7,44,'wwww'],[-7,45,'wWwwww'],[-6,46,'wWwwwww'],
-  [-7,47,'wwWwwwwww'],[-7,48,'WwwWWwwwww'],[-7,49,'.wwwwWWwww'],[-7,50,'..WwwwwwWw'],
-  [-6,51,'.wwwwwwWw'],[-6,52,'..WwwwwW'],[-5,53,'.wwwwwW'],[-5,54,'..WwwW'],
-  [-4,55,'.wwwW'],[-4,56,'..wW'],
+const HORN_X = [22, 39];             // efekt birimi; sol boynuz ve sağ boynuzun sol kenarı
+const WING = [ // sol kanat (omuzun arkası), sağdaki aynalanır
+  [-7,0,'w'],[-7,1,'ww'],[-7,2,'wwww'],[-7,3,'wWwwww'],[-6,4,'wWwwwww'],
+  [-7,5,'wwWwwwwww'],[-7,6,'WwwWWwwwww'],[-7,7,'.wwwwWWwww'],[-7,8,'..WwwwwwWw'],
+  [-6,9,'.wwwwwwWw'],[-6,10,'..WwwwwW'],[-5,11,'.wwwwwW'],[-5,12,'..WwwW'],
+  [-4,13,'.wwwW'],[-4,14,'..wW'],
 ];
 const WING_COL = { w: '#ffffff', W: '#d6e2f2' };
+const SHOULDER_Y = Math.floor(Math.min(SP.top[4], SP.top[CW - 5]) / 2) - 9; // kanadın tepe satırı
+const HAIR_TOP = Math.floor(Math.min(...SP.top) / 2);
 
 // ---------------------------------------------------------------- DURUM
 const st = {
@@ -222,117 +119,107 @@ const st = {
 };
 
 // ---------------------------------------------------------------- ÇİZİM
-let grid = new Array(LW * LH);
+const cur = new Int8Array(CW * CH);
 function render(now) {
-  grid.fill(null);
-  const put = (x, y, c, dy = 0) => {
+  grid.fill(0);
+  const put = (x, y, c, dy = 0) => { // sprite koordinatı
     const X = x + OX, Y = y + OY + dy;
-    if (X >= 0 && Y >= 0 && X < LW && Y < LH && c) grid[Y * LW + X] = c;
+    if (X >= 0 && Y >= 0 && X < LW && Y < LH && c) grid[Y * LW + X] = col(c);
   };
-  const putRows = (rows, pal, dy = 0, flip = false) => {
-    for (const [x0, y, s] of rows) for (let i = 0; i < s.length; i++) {
-      const ch = s[i]; if (ch === '.') continue;
-      const x = x0 + i; put(flip ? mirror(x) : x, y, pal[ch], dy);
-    }
+  const putE = (ex, ey, c, dy = 0) => { // efekt birimi (2x2)
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) put(Math.round(ex * 2) + i, Math.round(ey * 2) + j, c, dy);
   };
 
   const talking = now - st.lastLoud < 400;
-  // nefes / konuşma sallanması: kafa 1 piksel iner-kalkar
-  let headDy = Math.floor(now / 1100) % 2;
-  if (talking) headDy = Math.floor(now / 230) % 2;
+  let headDy = Math.floor(now / 1100) % 2;          // nefes
+  if (talking) headDy = Math.floor(now / 230) % 2;  // konuşurken sallanma
   if (FIXED) headDy = 0;
-  const hp = (c, r, key) => put(c + HX, r + HY, PAL[key] || key, headDy);       // yüz koordinatında çiz
-  const hp2 = (c, r, key) => { hp(c, r, key); hp(FW - c, r, key); };             // simetrik çiz
 
-  // arka efektler
-  if (MODE === 'heaven') {
+  if (MODE === 'heaven') { // kanatlar (karakterin arkasında)
     const flap = Math.floor(now / 500) % 2;
-    putRows(WING, WING_COL, flap);
-    putRows(WING, WING_COL, flap, true);
+    for (const [x0, y, s] of WING) for (let i = 0; i < s.length; i++) {
+      if (s[i] === '.') continue;
+      putE(x0 + i, SHOULDER_Y + y + flap, WING_COL[s[i]]); putE(EM(x0 + i), SHOULDER_Y + y + flap, WING_COL[s[i]]);
+    }
   }
 
-  drawBody(put);
-  for (const [key, col] of HEAD) { const [c, r] = key.split(',').map(Number); hp(c, r, col); }
-  for (const [c, r] of BROWS[MODE === 'hell' ? 'angry' : 'normal']) hp2(c, r, 'B');
-  if (MODE === 'hell') for (const [c, r] of [[2,32],[3,32],[4,32],[5,32],[3,33],[4,33]]) hp2(c, r, 'c');
-
-  // gözler: açık / kırpma / uykulu
+  // kareleri birleştir: temel + kaş + ağız + göz
+  cur.set(BASE);
+  const apply = k => { const p = PATCH[k]; for (let i = 0; i < p.length; i += 2) cur[p[i]] = p[i + 1]; };
+  if (MODE === 'hell') apply('angry');
+  const mouthKey = FIXED && PATCH[FIXED] ? FIXED : st.mouth;
+  if (mouthKey !== 'closed' && PATCH[mouthKey] && mouthKey !== 'blink') apply(mouthKey);
   const sleepy = !FIXED && MODE === 'normal' && now - st.lastLoud > 30000;
   const blinking = FIXED === 'blink' || (!FIXED && now < st.blinkUntil);
-  for (let i = 0; i < 5; i++) {
-    let top = EYE[0][i], bot = EYE[1][i];
-    if (blinking) { top = 'L'; bot = 'k'; }
-    else if (sleepy) bot = (i === 0 || i === 4) ? 'k' : 'E';
-    hp2(5 + i, 26, top); hp2(5 + i, 27, bot);
-  }
-  if (!blinking && !sleepy) { hp(EYE_HL[0], EYE_HL[1], 'W'); hp(FW - EYE_HL[0] + 2, EYE_HL[1], 'W'); } // iki gözde de irisin sağ üstü
+  if (blinking) apply('blink');
 
-  // ağız
-  const m = MOUTHS[FIXED && MOUTHS[FIXED] ? FIXED : st.mouth];
-  m.forEach((row, i) => { for (let k = 0; k < row.length; k++) if (row[k] !== '.') hp(9 + k, 37 + i, row[k]); });
+  // önce gövde, sonra kafa (kafa nefesle 1 piksel iner-kalkar)
+  const draw = (y0, y1, dy) => {
+    for (let y = y0; y < y1; y++) for (let x = 0; x < CW; x++) {
+      const j = y * CW + x, i = cur[j]; if (i < 0) continue;
+      let c = PAL32[i];
+      if (MODE === 'hell' && FLUSH.has(j)) c = mixRed(i, FLUSH.get(j));
+      put(x, y, c, dy);
+    }
+  };
+  draw(SP.split, CH, 0);
+  draw(0, SP.split, headDy);
 
   // gözlük parlaması: camların üstünden çapraz geçen ışık
   const gt = now - st.glintAt;
   if (!FIXED && gt > 0 && gt < 420) {
-    const p = Math.floor(gt / 420 * 34) - 6;
-    for (const [l, off] of [[2, 0], [17, 15]]) for (let r = 25; r <= 30; r++) for (let c = l; c < l + 10; c++) {
-      const d = (c - l + off) + (30 - r) - p;
-      const isEye = r >= 26 && r <= 27 && ((c >= 5 && c <= 9) || (c >= 19 && c <= 23));
-      if ((d === 0 || d === 1) && !isEye) hp(c, r, '#ffffff');
-    }
+    const p = LENS_MIN - 3 + (gt / 420) * (LENS_MAX - LENS_MIN + 6);
+    SP.lens.forEach((j, n) => { const d = LENS_SUM[n] - p; if (d >= 0 && d < 2.2) put(j % CW, Math.floor(j / CW), '#ffffff', headDy); });
   } else if (!FIXED && gt >= 420) st.glintAt = now + 4000 + Math.random() * 5000;
 
-  if (MODE === 'hell') putRows(HORN, HORN_COL, headDy), putRows(HORN, HORN_COL, headDy, true);
+  if (MODE === 'hell') { // boynuzlar saçın üstünde
+    for (const [n, hx] of HORN_X.entries()) {
+      const base = Math.floor(SP.top[hx * 2 + 2] / 2) + 2;
+      for (const [dx, dy, ch] of HORN) putE(n === 0 ? hx + dx : hx + 3 - dx, base + dy, HORN_COL[ch], headDy);
+    }
+  }
 
   // dış çizgi (karakterin etrafına 1 piksel koyu kontur)
-  const out = [];
+  const K = col('#17121a'), out = [];
   for (let Y = 0; Y < LH; Y++) for (let X = 0; X < LW; X++) {
-    if (grid[Y * LW + X]) continue;
-    if ((X > 0 && grid[Y * LW + X - 1]) || (X < LW - 1 && grid[Y * LW + X + 1]) ||
-        (Y > 0 && grid[(Y - 1) * LW + X]) || (Y < LH - 1 && grid[(Y + 1) * LW + X])) out.push(Y * LW + X);
+    const j = Y * LW + X; if (grid[j]) continue;
+    if ((X > 0 && grid[j - 1]) || (X < LW - 1 && grid[j + 1]) || (Y > 0 && grid[j - LW]) || (Y < LH - 1 && grid[j + LW])) out.push(j);
   }
-  for (const i of out) grid[i] = PAL.K;
+  for (const j of out) grid[j] = K;
 
-  // hale (konturdan sonra, kendi koyu sarı kenarıyla)
-  if (MODE === 'heaven') {
-    const hy = -7 + (Math.floor(now / 700) % 2);
+  if (MODE === 'heaven') { // hale
+    const hy = HAIR_TOP - 7 + (Math.floor(now / 700) % 2);
     const ring = ['.....YYYYYYYYYYY.....', '..YYYyyyyyyyyyyyYYY..', 'YYy...............yYY',
                   '..YYYyyyyyyyyyyyYYY..', '.....YYYYYYYYYYY.....'];
-    ring.forEach((s, j) => { for (let i = 0; i < s.length; i++) if (s[i] !== '.') put(15 + i, hy + j, s[i] === 'Y' ? '#f5c431' : '#fff3a8'); });
+    const hx = Math.round(CW / 4) + 2 - 10;
+    ring.forEach((s, j) => { for (let i = 0; i < s.length; i++) if (s[i] !== '.') putE(hx + i, hy + j, s[i] === 'Y' ? '#f5c431' : '#fff3a8'); });
   }
 
-  // parçacıklar (alevler, buhar, yıldızlar, zzz)
-  tickParticles(now, put, talking, sleepy, headDy);
+  tickParticles(now, putE, talking, sleepy);
 
-  // tuvale bas
+  bctx.putImageData(img, 0, 0);
   g.clearRect(0, 0, cv.width, cv.height);
-  for (let i = 0; i < grid.length; i++) {
-    const c = grid[i]; if (!c) continue;
-    g.fillStyle = c;
-    g.fillRect((i % LW) * SCALE, Math.floor(i / LW) * SCALE, SCALE, SCALE);
-  }
+  g.drawImage(buf, 0, 0, cv.width, cv.height);
 }
 
-// ---------------------------------------------------------------- PARÇACIKLAR
+// ---------------------------------------------------------------- PARÇACIKLAR (efekt birimiyle)
 let lastSpawn = 0;
-function tickParticles(now, put, talking, sleepy, headDy) {
-  const P = st.particles;
+function tickParticles(now, put, talking, sleepy) {
+  const P = st.particles, EW = CW / 2, EH = CH / 2;
   if (FIXED) return;
   if (now - lastSpawn > 70) {
     lastSpawn = now;
     if (MODE === 'hell') {
-      // iki yandan yükselen küçük alevler
       for (let n = 0; n < 2; n++) { const side = Math.random() < 0.5 ? -1 : 1;
-      P.push({ k: 'fire', x: side < 0 ? -6 + Math.random() * 7 : CW - 1 + Math.random() * 7, y: CH - 1, vy: -0.35 - Math.random() * 0.3, vx: (Math.random() - 0.5) * 0.15, life: 0, max: 30 + Math.random() * 25 }); }
-      // bağırınca kulaklardan buhar
-      if (st.level > OPEN_DB + 6 && Math.random() < 0.6) {
-        const s = Math.random() < 0.5 ? -1 : 1;
-        P.push({ k: 'steam', x: s < 0 ? HX - 3 : HX + FW + 3, y: HY + 27, vy: -0.25, vx: s * 0.35, life: 0, max: 22 });
+      P.push({ k: 'fire', x: side < 0 ? -7 + Math.random() * 7 : EW + Math.random() * 7, y: EH - 1, vy: -0.35 - Math.random() * 0.3, vx: (Math.random() - 0.5) * 0.15, life: 0, max: 30 + Math.random() * 25 }); }
+      if (st.level > OPEN_DB + 6 && Math.random() < 0.6) { // bağırınca kulaklardan buhar
+        const s = Math.random() < 0.5 ? 0 : 1, [ex, ey] = SP.ears[s];
+        P.push({ k: 'steam', x: ex / 2, y: ey / 2, vy: -0.25, vx: (s ? 1 : -1) * 0.35, life: 0, max: 22 });
       }
     } else if (MODE === 'heaven') {
-      if (Math.random() < 0.35) P.push({ k: 'star', x: Math.random() < 0.5 ? -7 + Math.random() * 12 : CW - 5 + Math.random() * 12, y: -6 + Math.random() * 36, vy: 0, vx: 0, life: 0, max: 18 });
+      if (Math.random() < 0.35) P.push({ k: 'star', x: Math.random() < 0.5 ? -7 + Math.random() * 12 : EW - 5 + Math.random() * 12, y: -6 + Math.random() * 40, vy: 0, vx: 0, life: 0, max: 18 });
     } else if (sleepy && Math.random() < 0.08) {
-      P.push({ k: 'z', x: HX + FW + 2, y: 6, vy: -0.12, vx: 0.08, life: 0, max: 60 });
+      P.push({ k: 'z', x: EW - 12, y: HAIR_TOP + 4, vy: -0.12, vx: 0.08, life: 0, max: 60 });
     }
   }
   for (let i = P.length - 1; i >= 0; i--) {
