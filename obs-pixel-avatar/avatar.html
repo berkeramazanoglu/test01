@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Pixel Avatar</title>
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  canvas { display: block; image-rendering: pixelated; }
+  #dbg, #msg {
+    position: fixed; left: 4px; font: 12px/1.35 monospace; color: #fff;
+    background: rgba(0,0,0,.65); padding: 4px 6px; white-space: pre; border-radius: 4px;
+  }
+  #dbg { bottom: 4px; display: none; }
+  #msg { top: 4px; display: none; color: #ffd5d5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="dbg"></div>
+<div id="msg"></div>
+<script src="ayarlar.js"></script>
+<script>
+/* =====================================================================
+   PIXEL AVATAR — ses seviyesine göre konuşan pixel karakter (OBS için)
+
+   URL parametreleri (hepsi isteğe bağlı):
+     mode=normal | hell | heaven      sahneye göre kostüm
+     scale=6                          piksel büyütme (6 → 360x396 px)
+     audio=auto | obs | mic | demo    ses kaynağı (auto: önce OBS, olmazsa mikrofon)
+     input=Mikrofon                   OBS'teki mikrofon kaynağının adı (bir kısmı yeter)
+     pw=şifre                         obs-websocket şifresi (Araçlar → WebSocket Sunucu Ayarları)
+     port=4455                        obs-websocket portu
+     half=-42  open=-30               ağız eşikleri (dB). Ağız az açılıyorsa sayıları küçült (-48 gibi)
+     debug=1                          ses seviyesi ve kaynak listesini göster
+     frame=closed|half|open|blink     sabit kare (PNG çıkarmak için)
+   ===================================================================== */
+
+const URLQ = new URLSearchParams(location.search + '&' + location.hash.slice(1));
+const AYAR = window.AVATAR_AYAR || {};
+// URL'de yoksa ayarlar.js'teki değeri kullan
+const AYAR_MAP = { pw: 'sifre', input: 'mikrofon', half: 'yarim', open: 'acik', scale: 'olcek', port: 'port', audio: 'ses', mode: 'mod', debug: 'ayar_ekrani' };
+const Q = { get: k => URLQ.get(k) ?? (AYAR[AYAR_MAP[k]] != null && AYAR[AYAR_MAP[k]] !== '' ? String(AYAR[AYAR_MAP[k]]) : null),
+            has: k => Q.get(k) !== null };
+const SCALE = Math.max(1, +Q.get('scale') || 6);
+const MODE = (Q.get('mode') || 'normal').toLowerCase();
+const AUDIO = (Q.get('audio') || 'auto').toLowerCase();
+const HALF_DB = Q.has('half') ? +Q.get('half') : -42;
+const OPEN_DB = Q.has('open') ? +Q.get('open') : -30;
+const DEBUG = ['1', 'true'].includes(Q.get('debug'));
+const FIXED = Q.get('frame');
+
+// Mantıksal tuval: karakter 44x52, etrafında boynuz/hale/kanat için pay
+const CW = 44, CH = 52, OX = 8, OY = 12;
+const LW = CW + OX * 2, LH = CH + OY + 2;
+
+const cv = document.getElementById('c');
+cv.width = LW * SCALE; cv.height = LH * SCALE;
+const g = cv.getContext('2d');
+
+// ---------------------------------------------------------------- PALET
+const PAL = {
+  K: '#1b1418',            // dış çizgi
+  H: '#2b1f1c', h: '#4c3730', // saç, saç parlaması
+  S: '#f3cdb5', s: '#e2aa90', c: '#f1a59b', // ten, gölge, allık
+  B: '#2b1f1c',            // kaş
+  G: '#141218',            // gözlük çerçevesi
+  L: '#f7e2d6',            // cam arkası ten (hafif açık)
+  E: '#2a2430', W: '#ffffff', // göz, göz parlaması
+  M: '#b4505a', O: '#5a1d2a', t: '#e8737d', // dudak, ağız içi, dil
+};
+const SHIRT = { p: '#bf9168', P: '#80553a', q: '#4d2f1f', C: '#d9b892', sh: '#6e4630' };
+const VEST = { a: '#2e4339', b: '#263830', trim: '#1c2a24' };
+const TIE = { T: '#2a2422', k: '#3c3431' };
+const STRAP = { R: '#8d5f3c', r: '#6a4429' };
+
+// ---------------------------------------------------------------- KAFA
+// [başlangıç sütunu, satır, piksel dizisi]  ('.' = boş)
+const HAIR = [ // sütun 7'den başlar (30 piksel); dağınık, dikleşen saç
+  [7,-2, '..........H.......H...........'],
+  [7,-1, '......H...HH...H..HH....H.....'],
+  [7, 0, '.....HH..HHH..HH.HHH...HH.....'],
+  [7, 1, '....HHHH.HHHHHHHHHHHH.HHH..H..'],
+  [7, 2, '...HHHHHhHHHHhHHHHHHHHHHHHHH..'],
+  [7, 3, '..HHHHHhHHHHhHHHHHhHHHHHHHHHH.'],
+  [7, 4, '..HHHHhHHHHhHHHHHhHHHHHhHHHHH.'],
+  [7, 5, '.HHHHhHHHHhHHHHHhHHHHHhHHHHHHH'],
+  [7, 6, '.HHHHHHHHHHHHHHHHHHHHhHHHHHHH.'],
+  [7, 7, '..HHHHHHHHHHHHHHHHHHHHHHHHHHH.'],
+  [7, 8, '..HHHHHHHHHHHHHHHHHHHHHHHHHHH.'],
+  [7, 9, '..HHHHHHHHHHHHHHHHHHHHHHHHHHH.'],
+  [7,10, '..HHHHHHHSHHHHHSHHHHHHHHHHHHH.'],
+  [7,11, '..HHHHHSSSHHHSSSHHHHSHHHHHHHH.'],
+  [7,12, '..HHHSSSSSHSSSSSHHSSSSSHSHHHH.'],
+  [9,13, 'H'],[9,14,'H'],[9,15,'H'],[34,13,'H'],[34,14,'H'],[34,15,'H'],
+];
+const FACE = [ // sütun 10'dan başlar, 24 piksel
+  [10,13, 'HSSSBBBBBSSSSSBBBBBSSSSH'],
+  [10,14, 'HSSGGGGGGGGSSGGGGGGGGSSH'],
+  [10,15, 'GGGGLLLLLLGGGGLLLLLLGGGG'],
+  [10,16, 'SSSGLLEWLLGSSGLLEWLLGSSS'],
+  [10,17, 'SSSGLLEELLGSSGLLEELLGSSS'],
+  [10,18, 'SSSGLLLLLLGSSGLLLLLLGSSS'],
+  [10,19, 'SSSGGGGGGGGSSGGGGGGGGSSS'],
+  [10,20, 'SSSSSSSSSSSssSSSSSSSSSSS'],
+  [10,21, 'SSScccSSSSSsSSSSSScccSSS'],
+  [10,22, 'SSScccSSSSSSSSSSSScccSSS'],
+  [10,23, 'SSSSSSSSSSSSSSSSSSSSSSSS'],
+  [10,24, 'SSSSSSSSSSSSSSSSSSSSSSSS'],
+  [10,25, '.sSSSSSSSSSSSSSSSSSSSSs.'],
+  [10,26, '..sSSSSSSSSSSSSSSSSSSs..'],
+  [10,27, '...ssSSSSSSSSSSSSSSss...'],
+  [10,28, '.....sssSSSSSSSSsss.....'],
+];
+const EARS = [
+  [ 9,16,'S'],[ 9,17,'S'],[ 9,18,'S'],[ 9,19,'S'],[ 9,20,'s'],
+  [ 8,17,'s'],[ 8,18,'s'],[ 8,19,'s'],
+  [34,16,'S'],[34,17,'S'],[34,18,'S'],[34,19,'S'],[34,20,'s'],
+  [35,17,'s'],[35,18,'s'],[35,19,'s'],
+];
+// Ağız kareleri (sütun 19, satır 23'ten itibaren)
+const MOUTHS = {
+  closed: ['M....M', '.MMMM.'],
+  half:   ['.MMMM.', 'MOOOOM', '.MMMM.'],
+  open:   ['.MMMM.', 'MOOOOM', 'MOttOM', '.MMMM.'],
+  shout:  ['.MMMM.', 'MOOOOM', 'MOOOOM', 'MOttOM', '.MMMM.'],
+};
+const EYE_PIX = [[16,16],[17,16],[16,17],[17,17],[26,16],[27,16],[26,17],[27,17]];
+
+// ---------------------------------------------------------------- GÖVDE
+function drawBody(put) {
+  const cx = 22;
+  const hwOf = y => ({ 32: 9, 33: 13, 34: 16, 35: 18 })[y] ?? 19;
+  for (let y = 28; y < CH; y++) {
+    for (let x = 0; x < CW; x++) {
+      const dx = x + 0.5 - cx, ax = Math.abs(dx);
+      if (y < 32) { // boyun
+        if (ax < 5) put(x, y, y <= 29 ? PAL.s : PAL.S);
+        continue;
+      }
+      const hw = hwOf(y);
+      if (ax >= hw) continue;
+      const vn = Math.max(0, 7 - (y - 32) * 0.65);
+      const vestHalf = y >= 35 ? hw - 5 : hw - 3;
+      let col;
+      if (ax < vn) { // V yaka içi: gömlek + kravat
+        if (y <= 33 && ax < 2.5) col = (y === 32 ? TIE.k : TIE.T);
+        else if (ax < 1.5) col = (y % 3 === 0 ? TIE.k : TIE.T);
+        else if (y <= 34) col = SHIRT.C;
+        else col = plaid(x, y);
+      } else if (ax < vestHalf) { // yelek
+        if (ax < vn + 1.3) col = VEST.trim;
+        else col = (x % 2 ? VEST.a : VEST.b);
+      } else { // gömlek kolu
+        col = ax > hw - 1.5 ? SHIRT.sh : plaid(x, y);
+      }
+      put(x, y, col);
+    }
+  }
+  // çanta askısı (omuzdan kalçaya çapraz)
+  for (let y = 33; y < CH; y++) {
+    const xs = cx + 13 - (y - 33) * 1.7;
+    for (let x = 0; x < CW; x++) {
+      const d = x + 0.5 - xs;
+      if (Math.abs(d) < 1.4 && Math.abs(x + 0.5 - cx) < hwOf(y)) put(x, y, d > 0.4 ? STRAP.r : STRAP.R);
+    }
+  }
+}
+function plaid(x, y) {
+  const a = x % 4 === 0, b = y % 4 === 0;
+  return a && b ? SHIRT.q : (a || b) ? SHIRT.P : SHIRT.p;
+}
+
+// ---------------------------------------------------------------- KOSTÜMLER
+const mirror = x => CW - 1 - x;
+const HORN = [
+  [10,-4,'r'],[10,-3,'r'],[11,-3,'r'],[11,-2,'r'],[12,-2,'R'],
+  [11,-1,'r'],[12,-1,'R'],[13,-1,'R'],[12,0,'r'],[13,0,'R'],[14,0,'R'],
+  [12,1,'r'],[13,1,'R'],[14,1,'R'],[15,1,'R'],
+];
+const HORN_COL = { r: '#ff6a55', R: '#c8202f' };
+const WING = [ // sol kanat, sağdaki aynalanır
+  [-7,24,'w'],[-7,25,'ww'],[-7,26,'wwww'],[-7,27,'wWwwww'],[-6,28,'wWwwwww'],
+  [-7,29,'wwWwwwwww'],[-7,30,'WwwWWwwwww'],[-7,31,'.wwwwWWwww'],[-7,32,'..WwwwwwWw'],
+  [-6,33,'.wwwwwwWw'],[-6,34,'..WwwwwW'],[-5,35,'.wwwwwW'],[-5,36,'..WwwW'],
+  [-4,37,'.wwwW'],[-4,38,'..wW'],
+];
+const WING_COL = { w: '#ffffff', W: '#d6e2f2' };
+
+// ---------------------------------------------------------------- DURUM
+const st = {
+  mouth: 'closed', level: -100, lastLoud: 0, mouthSince: 0,
+  blinkUntil: 0, nextBlink: 1500, glintAt: 3000, particles: [], src: '—', inputs: [],
+};
+
+// ---------------------------------------------------------------- ÇİZİM
+let grid = new Array(LW * LH);
+function render(now) {
+  grid.fill(null);
+  const put = (x, y, c, dy = 0) => {
+    const X = x + OX, Y = y + OY + dy;
+    if (X >= 0 && Y >= 0 && X < LW && Y < LH && c) grid[Y * LW + X] = c;
+  };
+  const putRows = (rows, pal, dy = 0, flip = false) => {
+    for (const [x0, y, s] of rows) for (let i = 0; i < s.length; i++) {
+      const ch = s[i]; if (ch === '.') continue;
+      const x = x0 + i; put(flip ? mirror(x) : x, y, pal[ch], dy);
+    }
+  };
+
+  const talking = now - st.lastLoud < 400;
+  // nefes / konuşma sallanması: kafa 1 piksel iner-kalkar
+  let headDy = Math.floor(now / 1100) % 2;
+  if (talking) headDy = Math.floor(now / 230) % 2;
+  if (FIXED) headDy = 0;
+
+  // arka efektler
+  if (MODE === 'heaven') {
+    const flap = Math.floor(now / 500) % 2;
+    putRows(WING, WING_COL, flap);
+    putRows(WING, WING_COL, flap, true);
+  }
+
+  drawBody(put);
+  putRows(HAIR, PAL, headDy);
+  putRows(FACE, PAL, headDy);
+  for (const [x, y, ch] of EARS) put(x, y, PAL[ch], headDy);
+
+  // kızgın kaşlar (cehennem)
+  if (MODE === 'hell') {
+    for (const x of [14, 15, 27, 28]) put(x, 13, PAL.S, headDy);
+    for (const [x, y] of [[14,12],[15,12],[16,13],[17,13],[18,13],[25,13],[26,13],[27,12],[28,12],[24,13]])
+      put(x, y, PAL.B, headDy);
+    for (const [x, y] of [[12,22],[13,23],[30,22],[29,23]]) put(x, y, PAL.c, headDy);
+  }
+
+  // gözler: kırpma / uykulu
+  const sleepy = !FIXED && MODE === 'normal' && now - st.lastLoud > 30000;
+  const blinking = FIXED === 'blink' || (!FIXED && now < st.blinkUntil);
+  if (blinking) {
+    for (const [x, y] of EYE_PIX) put(x, y, y === 16 ? PAL.L : PAL.E, headDy);
+    for (const x of [15, 18, 25, 28]) put(x, 17, PAL.E, headDy);
+  } else if (sleepy) {
+    for (const [x, y] of EYE_PIX) if (y === 16) put(x, y, PAL.L, headDy);
+  }
+
+  // ağız
+  const m = MOUTHS[FIXED && MOUTHS[FIXED] ? FIXED : st.mouth];
+  m.forEach((row, i) => { for (let k = 0; k < row.length; k++) if (row[k] !== '.') put(19 + k, 23 + i, PAL[row[k]], headDy); });
+
+  // gözlük parlaması: camların üstünden çapraz geçen ışık
+  const gt = now - st.glintAt;
+  if (!FIXED && gt > 0 && gt < 420) {
+    const p = Math.floor(gt / 420 * 24) - 4;
+    for (const [lx, off] of [[14, 0], [24, 10]]) for (let y = 15; y <= 18; y++) for (let x = lx; x < lx + 6; x++) {
+      const d = (x - lx + off) + (18 - y) - p;
+      if ((d === 0 || d === 1) && !EYE_PIX.some(e => e[0] === x && e[1] === y)) put(x, y, '#ffffff', headDy);
+    }
+  } else if (!FIXED && gt >= 420) st.glintAt = now + 4000 + Math.random() * 5000;
+
+  if (MODE === 'hell') putRows(HORN, HORN_COL, headDy), putRows(HORN, HORN_COL, headDy, true);
+
+  // dış çizgi (karakterin etrafına 1 piksel koyu kontur)
+  const out = [];
+  for (let Y = 0; Y < LH; Y++) for (let X = 0; X < LW; X++) {
+    if (grid[Y * LW + X]) continue;
+    if ((X > 0 && grid[Y * LW + X - 1]) || (X < LW - 1 && grid[Y * LW + X + 1]) ||
+        (Y > 0 && grid[(Y - 1) * LW + X]) || (Y < LH - 1 && grid[(Y + 1) * LW + X])) out.push(Y * LW + X);
+  }
+  for (const i of out) grid[i] = PAL.K;
+
+  // hale (konturdan sonra, kendi koyu sarı kenarıyla)
+  if (MODE === 'heaven') {
+    const hy = -9 + (Math.floor(now / 700) % 2);
+    const ring = [[13, hy, '....YYYYYYYYYY....'], [13, hy + 1, '.YYYyyyyyyyyyyYYY.'], [13, hy + 2, 'YYy............yYY'],
+                  [13, hy + 3, '.YYYyyyyyyyyyyYYY.'], [13, hy + 4, '....YYYYYYYYYY....']];
+    for (const [x0, y, s] of ring) for (let i = 0; i < s.length; i++) {
+      if (s[i] === '.') continue;
+      put(x0 + i, y, s[i] === 'Y' ? '#f5c431' : '#fff3a8');
+    }
+  }
+
+  // parçacıklar (alevler, buhar, yıldızlar, zzz)
+  tickParticles(now, put, talking, sleepy, headDy);
+
+  // tuvale bas
+  g.clearRect(0, 0, cv.width, cv.height);
+  for (let i = 0; i < grid.length; i++) {
+    const c = grid[i]; if (!c) continue;
+    g.fillStyle = c;
+    g.fillRect((i % LW) * SCALE, Math.floor(i / LW) * SCALE, SCALE, SCALE);
+  }
+}
+
+// ---------------------------------------------------------------- PARÇACIKLAR
+let lastSpawn = 0;
+function tickParticles(now, put, talking, sleepy, headDy) {
+  const P = st.particles;
+  if (FIXED) return;
+  if (now - lastSpawn > 70) {
+    lastSpawn = now;
+    if (MODE === 'hell') {
+      // iki yandan yükselen küçük alevler
+      for (let n = 0; n < 2; n++) { const side = Math.random() < 0.5 ? -1 : 1;
+      P.push({ k: 'fire', x: side < 0 ? -6 + Math.random() * 7 : 37 + Math.random() * 7, y: CH - 1, vy: -0.35 - Math.random() * 0.3, vx: (Math.random() - 0.5) * 0.15, life: 0, max: 30 + Math.random() * 25 }); }
+      // bağırınca kulaklardan buhar
+      if (st.level > OPEN_DB + 6 && Math.random() < 0.6) {
+        const s = Math.random() < 0.5 ? -1 : 1;
+        P.push({ k: 'steam', x: s < 0 ? 7 : 36, y: 18, vy: -0.25, vx: s * 0.35, life: 0, max: 22 });
+      }
+    } else if (MODE === 'heaven') {
+      if (Math.random() < 0.35) P.push({ k: 'star', x: Math.random() < 0.5 ? -7 + Math.random() * 12 : CW - 5 + Math.random() * 12, y: -6 + Math.random() * 36, vy: 0, vx: 0, life: 0, max: 18 });
+    } else if (sleepy && Math.random() < 0.08) {
+      P.push({ k: 'z', x: 34, y: 8, vy: -0.12, vx: 0.08, life: 0, max: 60 });
+    }
+  }
+  for (let i = P.length - 1; i >= 0; i--) {
+    const p = P[i]; p.life++; p.x += p.vx; p.y += p.vy;
+    if (p.life > p.max) { P.splice(i, 1); continue; }
+    const f = p.life / p.max, x = Math.round(p.x), y = Math.round(p.y);
+    if (p.k === 'fire') {
+      const col = f < 0.25 ? '#fff1a0' : f < 0.5 ? '#ffb43a' : f < 0.8 ? '#ff5a2a' : '#8a1d2a';
+      put(x, y, col); if (f < 0.6) put(x, y + 1, col);
+      if (f < 0.35) put(x + 1, y + 1, '#ffd060');
+    } else if (p.k === 'steam') {
+      const col = f < 0.5 ? '#f2f2f2' : '#b9b9c2';
+      put(x, y, col); put(x + 1, y, col); put(x, y - 1, col);
+    } else if (p.k === 'star') {
+      const on = f < 0.5 ? f * 2 : (1 - f) * 2;
+      put(x, y, '#fff7c2');
+      if (on > 0.5) { put(x - 1, y, '#ffe36a'); put(x + 1, y, '#ffe36a'); put(x, y - 1, '#ffe36a'); put(x, y + 1, '#ffe36a'); }
+    } else if (p.k === 'z') {
+      const col = '#cfd8ff';
+      for (const [a, b] of [[0,0],[1,0],[2,0],[1,1],[0,2],[1,2],[2,2]]) put(x + a, y + b, col);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- AĞIZ MANTIĞI
+function updateMouth(now, db) {
+  st.level = db;
+  let target = db >= OPEN_DB ? 'open' : db >= HALF_DB ? 'half' : 'closed';
+  if (target !== 'closed') st.lastLoud = now;
+  // cehennemde bağırınca kocaman ağız
+  if (MODE === 'hell' && db >= OPEN_DB + 6) target = 'shout';
+  // kapanırken azıcık beklet (titremesin)
+  if (target === 'closed' && now - st.lastLoud < 90) target = st.mouth === 'closed' ? 'closed' : 'half';
+  // uzun "aaaa"da donmasın: ara ara yarıya iner
+  if (target === st.mouth && target !== 'closed' && now - st.mouthSince > 320) {
+    target = 'half' === target ? 'open' : 'half';
+  }
+  if (target !== st.mouth && now - st.mouthSince > 70) { st.mouth = target; st.mouthSince = now; }
+}
+
+// ---------------------------------------------------------------- SES: OBS WEBSOCKET
+// OBS'in kendi mikrofon seviyesini okur → tarayıcıya mikrofon izni gerekmez.
+function connectObs() {
+  return new Promise((resolve, reject) => {
+    const port = Q.get('port') || 4455;
+    let ws;
+    try { ws = new WebSocket(`ws://127.0.0.1:${port}`); } catch (e) { return reject(e); }
+    let ok = false;
+    const fail = setTimeout(() => { if (!ok) { try { ws.close(); } catch (_) {} reject(new Error('obs-websocket cevap vermedi')); } }, 3000);
+    ws.onerror = () => { if (!ok) { clearTimeout(fail); reject(new Error('obs-websocket bağlanamadı (Araçlar → WebSocket Sunucu Ayarları → etkinleştir)')); } };
+    ws.onclose = (e) => {
+      if (!ok) { clearTimeout(fail); reject(new Error(e.code === 4009 ? 'obs-websocket şifresi yanlış (pw=...)' : 'obs-websocket bağlantısı kapandı')); }
+      else { st.src = 'OBS (koptu, yeniden deneniyor)'; setTimeout(startAudio, 2000); }
+    };
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.op === 0) { // Hello
+        const id = { op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 << 16 } }; // InputVolumeMeters
+        const auth = msg.d.authentication;
+        if (auth) {
+          const pw = Q.get('pw') || '';
+          if (!pw) { clearTimeout(fail); ws.close(); return reject(new Error('obs-websocket şifre istiyor: adrese &pw=ŞİFRE ekle')); }
+          const secret = b64(sha256(utf8(pw + auth.salt)));
+          id.d.authentication = b64(sha256(utf8(secret + auth.challenge)));
+        }
+        ws.send(JSON.stringify(id));
+      } else if (msg.op === 2) { // Identified
+        ok = true; clearTimeout(fail); st.src = 'OBS'; resolve();
+      } else if (msg.op === 5 && msg.d.eventType === 'InputVolumeMeters') {
+        const inputs = msg.d.eventData.inputs || [];
+        st.inputs = inputs.map(i => i.inputName);
+        const want = (Q.get('input') || '').toLowerCase();
+        let pick = want
+          ? inputs.find(i => i.inputName.toLowerCase().includes(want))
+          : inputs.find(i => /mic|mik|aux/i.test(i.inputName));
+        if (!pick) return;
+        st.src = 'OBS → ' + pick.inputName;
+        let mag = 0;
+        for (const ch of pick.inputLevelsMul || []) mag = Math.max(mag, ch[0] || 0);
+        updateMouth(performance.now(), mag > 0 ? 20 * Math.log10(mag) : -100);
+      }
+    };
+  });
+}
+
+// ---------------------------------------------------------------- SES: TARAYICI MİKROFONU
+async function connectMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('tarayıcı mikrofona erişemiyor');
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: false } });
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const an = ac.createAnalyser(); an.fftSize = 1024;
+  ac.createMediaStreamSource(stream).connect(an);
+  const buf = new Float32Array(an.fftSize);
+  st.src = 'tarayıcı mikrofonu';
+  setInterval(() => {
+    if (ac.state === 'suspended') ac.resume();
+    an.getFloatTimeDomainData(buf);
+    let s = 0; for (const v of buf) s += v * v;
+    const rms = Math.sqrt(s / buf.length);
+    updateMouth(performance.now(), rms > 0 ? 20 * Math.log10(rms) : -100);
+  }, 33);
+}
+
+// ---------------------------------------------------------------- SES: DEMO
+function connectDemo() {
+  st.src = 'demo (sahte konuşma)';
+  setInterval(() => {
+    const t = performance.now() / 1000;
+    const phrase = Math.sin(t * 0.9) > -0.3;            // konuş / sus
+    const syl = Math.abs(Math.sin(t * 9.5 + Math.sin(t * 3))); // heceler
+    updateMouth(performance.now(), phrase ? -50 + syl * 30 + Math.random() * 6 : -70);
+  }, 33);
+}
+
+async function startAudio() {
+  const errs = [];
+  const tries = AUDIO === 'obs' ? [connectObs] : AUDIO === 'mic' ? [connectMic] : AUDIO === 'demo' ? [connectDemo] : [connectObs, connectMic];
+  for (const fn of tries) {
+    try { await fn(); hideMsg(); return; } catch (e) { errs.push(e.message || String(e)); }
+  }
+  showMsg('Avatar sesi duymuyor:\n• ' + errs.join('\n• ') + '\n(bu yazı 20 sn sonra kaybolur)');
+}
+const msgEl = document.getElementById('msg');
+function showMsg(t) { msgEl.textContent = t; msgEl.style.display = 'block'; setTimeout(hideMsg, 20000); }
+function hideMsg() { msgEl.style.display = 'none'; }
+
+// ---------------------------------------------------------------- SHA-256 (obs-websocket şifresi için)
+function utf8(s) { return new TextEncoder().encode(s); }
+function b64(bytes) { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
+function sha256(data) {
+  const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  let H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const len = data.length, total = ((len + 9 + 63) >> 6) << 6;
+  const m = new Uint8Array(total); m.set(data); m[len] = 0x80;
+  const bits = len * 8; const dv = new DataView(m.buffer);
+  dv.setUint32(total - 8, Math.floor(bits / 0x100000000)); dv.setUint32(total - 4, bits >>> 0);
+  const w = new Uint32Array(64), r = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let o = 0; o < total; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(o + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = r(w[i-15], 7) ^ r(w[i-15], 18) ^ (w[i-15] >>> 3), s1 = r(w[i-2], 17) ^ r(w[i-2], 19) ^ (w[i-2] >>> 10);
+      w[i] = (w[i-16] + s0 + w[i-7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g2, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g2)) + K[i] + w[i]) >>> 0;
+      const t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g2; g2 = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H = H.map((v, i) => (v + [a, b, c, d, e, f, g2, h][i]) >>> 0);
+  }
+  const out = new Uint8Array(32); const odv = new DataView(out.buffer);
+  H.forEach((v, i) => odv.setUint32(i * 4, v)); return out;
+}
+
+// ---------------------------------------------------------------- DÖNGÜ
+const dbg = document.getElementById('dbg');
+if (DEBUG) dbg.style.display = 'block';
+let lastFrame = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (now - lastFrame < 33) return; // ~30 fps
+  lastFrame = now;
+  if (!FIXED && now > st.nextBlink) {
+    st.blinkUntil = now + 130;
+    st.nextBlink = now + 2500 + Math.random() * 4000;
+    if (Math.random() < 0.15) st.nextBlink = now + 300; // ara sıra çift kırpma
+  }
+  render(now);
+  if (DEBUG) {
+    const bar = '█'.repeat(Math.max(0, Math.min(30, Math.round((st.level + 70) / 2))));
+    dbg.textContent = `kaynak: ${st.src}\nseviye: ${st.level.toFixed(1)} dB  (yarım ${HALF_DB}, açık ${OPEN_DB})\n${bar}\nağız: ${st.mouth}` +
+      (st.inputs.length ? `\nOBS kaynakları: ${st.inputs.join(', ')}` : '');
+  }
+}
+if (FIXED) render(0); else { startAudio(); requestAnimationFrame(loop); }
+</script>
+</body>
+</html>
